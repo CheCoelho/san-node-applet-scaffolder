@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import {
-  buildAndRunDocker,
+  deleteAppFiles,
+  deleteDockerContainers,
   scaffoldApp,
   scaffoldTask,
   stopDockerContainers,
@@ -18,11 +19,8 @@ router.post("/scaffold", async (req: Request, res: Response) => {
   try {
     console.log(`Scaffolding Flask app with name: ${appId}`, req.body);
     scaffoldApp(appId);
-    const ids: string[] = req.body.nodeIds;
 
-    await scaffoldTask(message, returnTypes, args, appId, req.body.port, res);
-
-    buildAndRunDocker(appId, port, res);
+    await scaffoldTask(message, returnTypes, args, appId, port, res);
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
@@ -33,12 +31,11 @@ router.post("/scaffold", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/stop-containers", (req: Request, res: Response) => {
+router.post("/stop-apps", (req: Request, res: Response) => {
   const ports: number[] = req.body.ports;
-  const ids: string[] = req.body.nodeIds;
 
   try {
-    stopDockerContainers(ports, ids);
+    stopDockerContainers(ports);
     res.status(200).send({ message: "Docker containers stopping initiated." });
   } catch (error) {
     const errorMessage =
@@ -55,6 +52,25 @@ router.post("/stop-containers", (req: Request, res: Response) => {
 router.get("/test", (req: Request, res: Response) => {
   console.log(`Test route accessed`);
   res.status(200).send({ message: "Test route is working!" });
+});
+
+router.post("/remove-apps", (req: Request, res: Response) => {
+  const ports: number[] = req.body.ports;
+  const ids: string[] = req.body.nodeIds;
+
+  try {
+    deleteDockerContainers(ports);
+    deleteAppFiles(ids);
+    res.status(200).send({ message: "Docker containers stopping initiated." });
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    console.error(`Error stopping containers: ${errorMessage}`);
+    res.status(500).send({
+      message: "Failed to stop Docker containers",
+      error: errorMessage,
+    });
+  }
 });
 
 export default router;

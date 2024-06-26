@@ -10,6 +10,13 @@ import { makeRequest } from "./models/client";
 
 const appletsDir = path.join(__dirname, "..", "applets");
 
+const cleanCode = (code: string) => {
+  if (code.startsWith("```") && code.endsWith("```")) {
+    return code.split("\n").slice(1, -1).join("\n");
+  }
+  return code;
+};
+
 export const scaffoldTask = async (
   message: string,
   returnType: string,
@@ -28,10 +35,12 @@ export const scaffoldTask = async (
     console.log(`Task code received for ${id}: ${taskCode}`);
     console.log(`Requirements received for ${id}: ${requirementsContent}`);
 
+    const cleanedTaskCode = cleanCode(taskCode);
+
     const tasksFilePath = path.join(appletsDir, id, "tasks.py");
     console.log(`Writing tasks.py to: ${tasksFilePath}`);
 
-    await fs.promises.writeFile(tasksFilePath, taskCode);
+    await fs.promises.writeFile(tasksFilePath, cleanedTaskCode);
     console.log(`tasks.py for ${id} updated successfully`);
 
     const requirementsFilePath = path.join(appletsDir, id, "requirements.txt");
@@ -39,59 +48,55 @@ export const scaffoldTask = async (
     await fs.promises.writeFile(requirementsFilePath, requirementsContent);
     console.log(`requirements.txt for ${id} updated successfully`);
 
-    // Install the requirements
-    const installCommand = `pip install -r ${requirementsFilePath}`;
-    exec(installCommand, (installError, installStdout, installStderr) => {
-      if (installError) {
-        console.error(`Error installing requirements: ${installError.message}`);
-        res.status(500).send({
-          message: "Failed to install requirements",
-          error: installError.message,
-        });
-        return;
-      }
-      console.log(`Requirements installed successfully`);
-
-      // Rebuild the Docker image
-      const appDir = path.join(appletsDir, id);
-      const buildCommand = `docker build -t ${id} ${appDir}`;
-      exec(buildCommand, (buildError, buildStdout, buildStderr) => {
-        if (buildError) {
-          console.error(`Build error: ${buildError.message}`);
+    // Rebuild the Docker image
+    const appDir = path.join(appletsDir, id);
+    const buildCommand = `docker build -t ${id} ${appDir}`;
+    exec(buildCommand, (buildError, buildStdout, buildStderr) => {
+      if (buildError) {
+        console.error(`Build error: ${buildError.message}`);
+        if (!res.headersSent) {
           res.status(500).send({
             message: "Docker build failed",
             error: buildError.message,
           });
-          return;
         }
-        console.log(`Docker image rebuilt successfully for ${id}`);
+        return;
+      }
+      console.log(`Docker image rebuilt successfully for ${id}`);
 
-        // Run the Docker container
-        const runCommand = `docker run -d -p ${port}:80 ${id}`;
-        exec(runCommand, (runError, runStdout, runStderr) => {
-          if (runError) {
-            console.error(`Run error: ${runError.message}`);
+      // Run the Docker container
+      const runCommand = `docker run -d -p ${port}:80 ${id}`;
+      exec(runCommand, (runError, runStdout, runStderr) => {
+        if (runError) {
+          console.error(`Run error: ${runError.message}`);
+          if (!res.headersSent) {
             res
               .status(500)
               .send({ message: "Docker run failed", error: runError.message });
-            return;
           }
-          console.log(
-            `Docker container started successfully for ${id}, container ID: ${runStdout.trim()}`
-          );
+          return;
+        }
+        console.log(
+          `Docker container started successfully for ${id}, container ID: ${runStdout.trim()}`
+        );
+        if (!res.headersSent) {
           res.status(201).send({
             message:
               "Flask app scaffolded, requirements installed, and running in Docker!",
             containerId: runStdout.trim(),
           });
-        });
+        }
       });
     });
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
     console.error(`Error scaffolding task: ${errorMessage}`);
-    throw new Error(errorMessage);
+    if (!res.headersSent) {
+      res
+        .status(500)
+        .send({ message: "Failed to scaffold task", error: errorMessage });
+    }
   }
 };
 
@@ -109,45 +114,38 @@ export const scaffoldApp = (id: string) => {
   fs.writeFileSync(path.join(appDir, "Dockerfile"), dockerfileTemplate());
 };
 
-export const buildAndRunDocker = (id: string, port: number, res: Response) => {
-  const appDir = path.join(appletsDir, id);
-  console.log(`Building Docker image for ${id} from ${appDir}`);
-
-  const buildCommand = `docker build -t ${id} ${appDir}`;
-  const runCommand = `docker run -d -p ${port}:80 ${id}`;
-
-  exec(buildCommand, (buildError, buildStdout, buildStderr) => {
-    if (buildError) {
-      console.error(`Build error: ${buildError.message}`);
-      res
-        .status(500)
-        .send({ message: "Docker build failed", error: buildError.message });
-      return;
-    }
-
-    console.log(`Docker image built successfully for ${id}`);
-    exec(runCommand, (runError, runStdout, runStderr) => {
-      if (runError) {
-        console.error(`Run error: ${runError.message}`);
-        res
-          .status(500)
-          .send({ message: "Docker run failed", error: runError.message });
+export const stopDockerContainers = (ports: number[]) => {
+  ports.forEach((port) => {
+    const command = `docker ps -q --filter "publish=${port}"`;
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(
+          `Error finding container on port ${port}: ${error.message}`
+        );
         return;
       }
 
-      console.log(
-        `Docker container started successfully for ${id}, container ID: ${runStdout.trim()}`
-      );
-      res.status(201).send({
-        message: "Flask app scaffolded and running in Docker!",
-        containerId: runStdout.trim(),
-      });
+      const containerId = stdout.trim();
+      if (containerId) {
+        const stopCommand = `docker stop ${containerId}`;
+        exec(stopCommand, (stopError, stopStdout, stopStderr) => {
+          if (stopError) {
+            console.error(
+              `Error stopping container ${containerId}: ${stopError.message}`
+            );
+            return;
+          }
+          console.log(`Container ${containerId} stopped successfully`);
+        });
+      } else {
+        console.log(`No container found running on port ${port}`);
+      }
     });
   });
 };
 
-export const stopDockerContainers = (ports: number[], ids: string[]) => {
-  ports.forEach((port, index) => {
+export const deleteDockerContainers = (ports: number[]) => {
+  ports.forEach((port) => {
     const command = `docker ps -q --filter "publish=${port}"`;
     exec(command, (error, stdout, stderr) => {
       if (error) {
@@ -179,22 +177,54 @@ export const stopDockerContainers = (ports: number[], ids: string[]) => {
             }
             console.log(`Container ${containerId} removed successfully`);
 
-            // Remove the corresponding applet directory
-            const appDir = path.join(appletsDir, ids[index]);
-            fs.rm(appDir, { recursive: true, force: true }, (rmError) => {
-              if (rmError) {
+            const imageIdCommand = `docker images -q --filter "reference=${containerId}"`;
+            exec(imageIdCommand, (imageError, imageStdout, imageStderr) => {
+              if (imageError) {
                 console.error(
-                  `Error removing applet directory ${appDir}: ${rmError.message}`
+                  `Error finding image for container ${containerId}: ${imageError.message}`
                 );
                 return;
               }
-              console.log(`Applet directory ${appDir} removed successfully`);
+
+              const imageId = imageStdout.trim();
+              if (imageId) {
+                const removeImageCommand = `docker rmi ${imageId}`;
+                exec(
+                  removeImageCommand,
+                  (removeImageError, removeImageStdout, removeImageStderr) => {
+                    if (removeImageError) {
+                      console.error(
+                        `Error removing Docker image ${imageId}: ${removeImageError.message}`
+                      );
+                      return;
+                    }
+                    console.log(`Docker image ${imageId} removed successfully`);
+                  }
+                );
+              } else {
+                console.log(`No image found for container ${containerId}`);
+              }
             });
           });
         });
       } else {
         console.log(`No container found running on port ${port}`);
       }
+    });
+  });
+};
+
+export const deleteAppFiles = (ids: string[]) => {
+  ids.forEach((id) => {
+    const appDir = path.join(appletsDir, id);
+    fs.rm(appDir, { recursive: true, force: true }, (rmError) => {
+      if (rmError) {
+        console.error(
+          `Error removing applet directory ${appDir}: ${rmError.message}`
+        );
+        return;
+      }
+      console.log(`Applet directory ${appDir} removed successfully`);
     });
   });
 };
