@@ -1,1 +1,2 @@
-A simple express api to scaffold flask apps as nodes on a canvas. Each app has an api with a defined endpoint that runs a GPT generated task. The nodes can be piped into each other as functional chains. 
+A simple express api to scaffold flask apps that run a GPT generated task. The applets can be run in docker
+
