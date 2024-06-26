@@ -1,1 +1,1 @@
-A simple express api to scaffold flask apps with a defined endpoint that run a GPT generated task. 
+A simple express api to scaffold flask apps as nodes on a canvas. Each app has an api with a defined endpoint that runs a GPT generated task. The nodes can be piped into each other as functional chains. 
